@@ -1,13 +1,22 @@
+// ###################################
+// # controller.go
+
 package cmd
+// CrdController的控制逻辑的主干代码
 
 import (
 	"fmt"
 	"time"
 
-	"k8s.io/apimachinery/pkg/labels"
+	"github.com/idevz/crd-start/pkg/apis/crdstart/v1alpha1"
+	crdstartclientset "github.com/idevz/crd-start/pkg/client/clientset/versioned"
+	crdstartscheme "github.com/idevz/crd-start/pkg/client/clientset/versioned/scheme"
+	crdstartinformers "github.com/idevz/crd-start/pkg/client/informers/externalversions/crdstart/v1alpha1"
+	crdstartlisters "github.com/idevz/crd-start/pkg/client/listers/crdstart/v1alpha1"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -20,12 +29,7 @@ import (
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/client-go/util/workqueue"
-	"k8s.io/klog"
-
-	"github.com/idevz/crd-start/pkg/apis/crdstart/v1alpha1"
-	crdstartclientset "github.com/idevz/crd-start/pkg/client/clientset/versioned"
-	crdstartscheme "github.com/idevz/crd-start/pkg/client/clientset/versioned/scheme"
+	"k8s.io/clie"
 	crdstartinformers "github.com/idevz/crd-start/pkg/client/informers/externalversions/crdstart/v1alpha1"
 	crdstartlisters "github.com/idevz/crd-start/pkg/client/listers/crdstart/v1alpha1"
 )
@@ -35,9 +39,15 @@ const (
 	crQueueName         = "dcreater-queue"
 )
 
+// 定义CrdController结构体
 type CrdController struct {
+	// 两组clientSet用于和apiserver直接通信
 	kubeClientSet     kubernetes.Interface
 	crdStartCleintSet crdstartclientset.Interface
+
+	// 各资源对象对应的Lister和InformerSynced对，表明数据同步基于经典的List-Watch机制，
+	// 本地预先同步了所有关心的数据，后面通过Watch机制进行增量更新。
+        // InformerSynced标记了相关数据是否已经同步到本地。
 
 	deploymentsLister appslisters.DeploymentLister
 	deploymentsSynced cache.InformerSynced
@@ -120,12 +130,14 @@ func (c *CrdController) enQueueDcreater(obj interface{}) {
 	c.workQueue.Add(key)
 }
 
+// 主控逻辑
 func (c *CrdController) Run(threadiness int, stopCh <-chan struct{}) error {
 	defer utilruntime.HandleCrash()
 	defer c.workQueue.ShutDown()
 
 	klog.Infof("start crdstart controller")
 
+        // 我们先要等各个资源的Informer将目前集群中的相关数据同步到本地缓存后，再启动worker协程
 	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced, c.crdStartSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
@@ -213,12 +225,14 @@ func (c *CrdController) cleanAllControl(obj interface{}) {
 	return
 }
 
+
 func (c *CrdController) syncHandler(key string) error {
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 		return nil
 	}
+	// 我们从前面的工作队列中，获取待处理的对象。
 	dCreater, err := c.crdStartLister.Dcreaters(namespace).Get(name)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -228,7 +242,7 @@ func (c *CrdController) syncHandler(key string) error {
 		}
 		return err
 	}
-
+        // 并据些构建Deployment
 	deploymentName := dCreater.Spec.DeploymentName
 	if deploymentName == "" {
 		utilruntime.HandleError(
@@ -238,6 +252,7 @@ func (c *CrdController) syncHandler(key string) error {
 	deployment, err := c.deploymentsLister.
 		Deployments(dCreater.Namespace).Get(deploymentName)
 	if errors.IsNotFound(err) {
+                // 在help.go实现相关逻辑.
 		newDeployment, err := newDeployment(dCreater)
 		if err != nil {
 			utilruntime.HandleError(

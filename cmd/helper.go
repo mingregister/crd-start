@@ -1,3 +1,4 @@
+// helper.go
 package cmd
 
 import (
@@ -25,6 +26,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/klog"
+        // 关于获取Deployment对象的对应的Pods对象的列表的方法，是直接引用k8s中内建的DeploymentController。  
+        // 其实这并不是唯一的方法，我们也可能通过client-go提供的Informer机制来实现，
 	"k8s.io/kubernetes/pkg/apis/apps"
 	"k8s.io/kubernetes/pkg/controller"
 )
@@ -257,6 +260,7 @@ func parseYaml(dataObj interface{}, yamlTpl string) (*[]byte, error) {
 	return &jsonByte, err
 }
 
+// Deployment构建的相关逻辑
 func newDeployment(dCreater *v1alpha1.Dcreater) (*appsv1.Deployment, error) {
 	deployBytes, err := parseYaml(&deployForCrd{
 		DeploymentName: dCreater.Spec.DeploymentName,
@@ -270,6 +274,7 @@ func newDeployment(dCreater *v1alpha1.Dcreater) (*appsv1.Deployment, error) {
 	if err != nil {
 		return nil, err
 	}
+        // 为deployment对象添加对应对象所有者和终结器, 为后面在资源对象回收的过程中，能够利用kubernetes的级联删除垃圾回收机制打下基础。
 	deploymentObj.SetOwnerReferences([]metav1.OwnerReference{
 		*metav1.NewControllerRef(dCreater, v1alpha1.SchemeGroupVersion.WithKind("Dcreater")),
 	})
